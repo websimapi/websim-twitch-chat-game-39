@@ -199,7 +199,8 @@ function renderYSorted(ctx, players, map, drawStartX, drawEndX, drawStartY, draw
                         const spriteWidth = tileSize * 0.7;
                         const spriteHeight = tileSize * 0.55;
                         const drawX = Math.round(baseX - spriteWidth / 2);
-                        const drawY = Math.round(baseY - spriteHeight);
+                        // Move logs/bushes down by half their height so they sit centered in the grid space
+                        const drawY = Math.round(baseY - spriteHeight * 0.5);
                         ctx.drawImage(image, drawX, drawY, spriteWidth, spriteHeight);
                     } else {
                         // Trees: full height but still anchored to tile center
