@@ -212,7 +212,13 @@ function renderYSorted(ctx, players, map, drawStartX, drawEndX, drawStartY, draw
                     }
                 } else {
                     // 2D
-                    ctx.drawImage(image, screenX, screenY, tileSize, tileSize);
+                    if (item.type === 'tree') {
+                        // Offset tree upward by half a tile so trunk sits halfway up the grid cell
+                        const drawY = screenY - tileSize / 2;
+                        ctx.drawImage(image, screenX, drawY, tileSize, tileSize);
+                    } else {
+                        ctx.drawImage(image, screenX, screenY, tileSize, tileSize);
+                    }
                 }
             }
         }

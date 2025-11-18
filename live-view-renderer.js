@@ -151,7 +151,9 @@ export class LiveViewRenderer {
             } else if (item.type === 'tree') {
                 const screenX = Math.round(item.x * this.tileSize - cameraX);
                 const screenY = Math.round(item.yPos * this.tileSize - cameraY);
-                ctx.drawImage(this.assets.tree, screenX, screenY, this.tileSize, this.tileSize);
+                // Offset tree upward by half a tile so trunk is halfway up the grid cell
+                const drawY = screenY - this.tileSize / 2;
+                ctx.drawImage(this.assets.tree, screenX, drawY, this.tileSize, this.tileSize);
             }
         });
     }

@@ -293,10 +293,13 @@ export class Map {
                 }
                 
                 if (objectImage && objectImage.complete) {
+                     // For 2D legacy render, lift trees by half a tile so trunk is halfway up the grid cell
+                     const drawX = i * ts;
+                     const drawY = tileType === TILE_TYPE.TREE ? (j * ts - ts / 2) : (j * ts);
                      ctx.drawImage(
                         objectImage,
-                        i * ts,
-                        j * ts,
+                        drawX,
+                        drawY,
                         ts,
                         ts
                     );
