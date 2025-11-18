@@ -59,6 +59,12 @@ body, html {
     box-sizing: border-box;
 }
 
+/* Ensure Live View tab content uses full width and available height */
+#remote-inventory-container.tab-content {
+    max-width: none;
+    flex: 1;
+}
+
 #remote-inventory-container {
     background-color: #000;
     border: none;

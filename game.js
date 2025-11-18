@@ -162,7 +162,7 @@ export class Game {
         };
 
         // Gather surrounding map data
-        const VIEW_RADIUS = 8;
+        const VIEW_RADIUS = 16; // Increased radius so Live View shows a larger, more seamless region
         const mapChunkData = this.map.getChunk(player.pixelX, player.pixelY, VIEW_RADIUS);
 
         // Gather nearby players

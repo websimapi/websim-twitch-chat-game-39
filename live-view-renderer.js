@@ -40,8 +40,9 @@ export class LiveViewRenderer {
 
         // Zoom controls (similar to host camera)
         this.baseTileSize = 32;
-        this.zoom = 1;
-        this.minZoom = 0.5;
+        // Start slightly zoomed out so more of the world is visible by default
+        this.zoom = 0.75;
+        this.minZoom = 0.4;
         this.maxZoom = 2;
     }
 
