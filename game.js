@@ -25,7 +25,8 @@ export class Game {
         console.log("Game started with settings:", this.settings);
 
         this.players = new Map();
-        this.map = new GameMap(32); // TileSize is 32
+        this.baseTileSize = 32;
+        this.map = new GameMap(this.baseTileSize); // TileSize is 32
         this.camera = new Camera(this.canvas, this.map, this.players, this.settings);
         this.activeChoppingTargets = new Map();
 
@@ -40,6 +41,15 @@ export class Game {
         this.resize();
         window.addEventListener('resize', () => this.resize());
         window.addEventListener('keydown', (e) => this.handleKeyPress(e));
+        
+        // Mouse wheel zoom (on canvas only)
+        this.canvas.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            this.camera.handleWheel(e.deltaY);
+            // Update map tile size based on new zoom
+            const zoomedTileSize = this.baseTileSize * this.camera.zoom;
+            this.map.setTileSize(zoomedTileSize);
+        }, { passive: false });
         
         this.saveInterval = setInterval(async () => {
             await StorageManager.saveGameState(this.channel, this.worldName, this.players, this.map);
@@ -186,9 +196,11 @@ export class Game {
         this.canvas.width = window.innerWidth;
         this.canvas.height = window.innerHeight;
         
-        // Use a fixed tileSize for gameplay scale, allowing the map to be larger than viewport
-        const fixedTileSize = 32; 
-        this.map.setTileSize(fixedTileSize);
+        // Use a fixed base tileSize for gameplay scale, allowing the map to be larger than viewport
+        const fixedTileSize = this.baseTileSize; 
+        // Apply current zoom level from camera
+        const zoomedTileSize = fixedTileSize * (this.camera?.zoom || 1);
+        this.map.setTileSize(zoomedTileSize);
 
         this.map.setViewport(this.canvas.width, this.canvas.height);
     }

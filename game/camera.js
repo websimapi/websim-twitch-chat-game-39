@@ -13,6 +13,11 @@ export class Camera {
         this.focusedPlayerId = null;
         this.focusTimer = 0;
         this.FOCUS_DURATION = 60; // seconds
+
+        // Zoom parameters
+        this.zoom = 1;
+        this.minZoom = 0.5;
+        this.maxZoom = 2;
     }
 
     setFocus(playerId) {
@@ -21,6 +26,18 @@ export class Camera {
         const player = this.players.get(playerId);
         if (player) {
             console.log(`Camera focusing on: ${player.username} for ${this.FOCUS_DURATION} seconds.`);
+        }
+    }
+
+    handleWheel(deltaY) {
+        // deltaY > 0 => wheel down => zoom out
+        // deltaY < 0 => wheel up   => zoom in
+        const zoomStep = 0.1;
+        const factor = deltaY < 0 ? (1 + zoomStep) : (1 - zoomStep);
+        const newZoom = Math.min(this.maxZoom, Math.max(this.minZoom, this.zoom * factor));
+        if (newZoom !== this.zoom) {
+            this.zoom = newZoom;
+            console.log(`Camera zoom set to: ${this.zoom.toFixed(2)}`);
         }
     }
 
