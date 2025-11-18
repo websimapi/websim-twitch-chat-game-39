@@ -1,5 +1,6 @@
 import { TILE_TYPE } from './map-tile-types.js';
 import { renderPlayer } from './player-renderer.js';
+import { project, getSortDepth } from './game/projection.js';
 
 class MockPlayer {
     constructor(state) {
@@ -16,14 +17,14 @@ class MockPlayer {
     get actionTimer() { return this.stateData.actionTimer; }
     get actionTotalTime() { return this.stateData.actionTotalTime; }
     isPowered() { return true; } // Assume powered for rendering purposes
-    render(ctx, tileSize, cameraX, cameraY) {
+    render(ctx, tileSize, cameraX, cameraY, viewMode = '2d') {
         // Simplified energy object for renderer
         this.energy = {
             timestamps: this.stateData.energyTimestamps || [],
             currentCellDrainRatio: 0,
             flashState: 0,
         };
-        renderPlayer(ctx, this, tileSize, cameraX, cameraY);
+        renderPlayer(ctx, this, tileSize, cameraX, cameraY, viewMode);
     }
 }
 
@@ -35,6 +36,7 @@ export class LiveViewRenderer {
         this.assets = {};
         this.state = null;
         this.animationFrameId = null;
+        this.viewMode = '2d'; // '2d' or '2.5d'
     }
 
     async loadAssets() {
@@ -54,6 +56,12 @@ export class LiveViewRenderer {
 
         this.assets = { grass, tree, logs, bushes, flowers };
         console.log("Live View assets loaded.");
+    }
+
+    setViewMode(mode) {
+        if (mode === '2d' || mode === '2.5d') {
+            this.viewMode = mode;
+        }
     }
 
     updateState(newState) {
@@ -90,31 +98,105 @@ export class LiveViewRenderer {
         const { playerState, mapChunk, nearbyPlayers } = this.state;
         const mainPlayer = new MockPlayer(playerState);
 
-        const cameraX = (mainPlayer.pixelX * this.tileSize) - (this.canvas.width / 2);
-        const cameraY = (mainPlayer.pixelY * this.tileSize) - (this.canvas.height / 2);
+        const ts = this.tileSize;
+        const viewMode = this.viewMode;
+
+        // Compute camera based on view mode
+        let cameraX, cameraY;
+
+        if (viewMode === '2.5d') {
+            // Project player center and center camera on that point
+            const projected = project(mainPlayer.pixelX + 0.5, mainPlayer.pixelY + 0.5, 0, viewMode, ts);
+            cameraX = projected.x - this.canvas.width / 2;
+            cameraY = projected.y - this.canvas.height / 2;
+        } else {
+            // 2D top-down
+            cameraX = (mainPlayer.pixelX * ts) - (this.canvas.width / 2);
+            cameraY = (mainPlayer.pixelY * ts) - (this.canvas.height / 2);
+        }
 
         // Render map chunk
         if (mapChunk) {
-            for (let j = 0; j < mapChunk.grid.length; j++) {
-                for (let i = 0; i < mapChunk.grid[j].length; i++) {
-                    const tileType = mapChunk.grid[j][i];
-                    if (tileType === null) continue;
+            if (viewMode === '2.5d') {
+                ctx.save();
+                // Snap camera to whole pixels for smoother motion
+                const snappedCameraX = Math.round(cameraX);
+                const snappedCameraY = Math.round(cameraY);
+                ctx.translate(-snappedCameraX, -snappedCameraY);
+                // Apply isometric ground transform (same as MapRenderer)
+                ctx.transform(0.5, 0.25, -0.5, 0.25, 0, 0);
 
-                    const worldX = mapChunk.origin.x + i;
-                    const worldY = mapChunk.origin.y + j;
+                const pad = 2;
+                for (let j = -pad; j < mapChunk.grid.length + pad; j++) {
+                    for (let i = -pad; i < mapChunk.grid[0].length + pad; i++) {
+                        const worldX = mapChunk.origin.x + i;
+                        const worldY = mapChunk.origin.y + j;
 
-                    const screenX = Math.round(worldX * this.tileSize - cameraX);
-                    const screenY = Math.round(worldY * this.tileSize - cameraY);
+                        // Skip far out-of-bounds tiles
+                        if (worldY < mapChunk.origin.y ||
+                            worldY >= mapChunk.origin.y + mapChunk.grid.length ||
+                            worldX < mapChunk.origin.x ||
+                            worldX >= mapChunk.origin.x + mapChunk.grid[0].length) {
+                            // Just draw grass outside known chunk so ground doesn't look cut
+                            ctx.drawImage(this.assets.grass, worldX * ts, worldY * ts, ts, ts);
+                            continue;
+                        }
 
-                    ctx.drawImage(this.assets.grass, screenX, screenY, this.tileSize, this.tileSize);
+                        const tileType = mapChunk.grid[worldY - mapChunk.origin.y][worldX - mapChunk.origin.x];
+                        if (tileType === null) continue;
 
-                    let objectImage = null;
-                    if (tileType === TILE_TYPE.LOGS) objectImage = this.assets.logs;
-                    else if (tileType === TILE_TYPE.BUSHES) objectImage = this.assets.bushes;
-                    else if (tileType === TILE_TYPE.FLOWER_PATCH) objectImage = this.assets.flowers;
+                        ctx.drawImage(this.assets.grass, worldX * ts, worldY * ts, ts, ts);
 
-                    if (objectImage) {
-                        ctx.drawImage(objectImage, screenX, screenY, this.tileSize, this.tileSize);
+                        // Flat ground details (flowers only). Logs/bushes/trees stand up later.
+                        if (tileType === TILE_TYPE.FLOWER_PATCH) {
+                            ctx.drawImage(this.assets.flowers, worldX * ts, worldY * ts, ts, ts);
+                        }
+                    }
+                }
+
+                // Subtle grid in 2.5D
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+                ctx.lineWidth = 1;
+                for (let i = 0; i <= mapChunk.grid[0].length; i++) {
+                    const x = (mapChunk.origin.x + i) * ts;
+                    ctx.beginPath();
+                    ctx.moveTo(x, mapChunk.origin.y * ts);
+                    ctx.lineTo(x, (mapChunk.origin.y + mapChunk.grid.length) * ts);
+                    ctx.stroke();
+                }
+                for (let j = 0; j <= mapChunk.grid.length; j++) {
+                    const y = (mapChunk.origin.y + j) * ts;
+                    ctx.beginPath();
+                    ctx.moveTo(mapChunk.origin.x * ts, y);
+                    ctx.lineTo((mapChunk.origin.x + mapChunk.grid[0].length) * ts, y);
+                    ctx.stroke();
+                }
+
+                ctx.restore();
+            } else {
+                // 2D top-down (existing behavior)
+                for (let j = 0; j < mapChunk.grid.length; j++) {
+                    for (let i = 0; i < mapChunk.grid[j].length; i++) {
+                        const tileType = mapChunk.grid[j][i];
+                        if (tileType === null) continue;
+
+                        const worldX = mapChunk.origin.x + i;
+                        const worldY = mapChunk.origin.y + j;
+
+                        const screenX = Math.round(worldX * ts - cameraX);
+                        const screenY = Math.round(worldY * ts - cameraY);
+
+                        ctx.drawImage(this.assets.grass, screenX, screenY, ts, ts);
+
+                        let objectImage = null;
+                        if (tileType === TILE_TYPE.LOGS) objectImage = this.assets.logs;
+                        else if (tileType === TILE_TYPE.BUSHES) objectImage = this.assets.bushes;
+                        else if (tileType === TILE_TYPE.FLOWER_PATCH) objectImage = this.assets.flowers;
+
+                        if (objectImage) {
+                            // Trees are drawn later; keep logs/bushes/flowers flat in 2D
+                            ctx.drawImage(objectImage, screenX, screenY, ts, ts);
+                        }
                     }
                 }
             }
@@ -122,39 +204,96 @@ export class LiveViewRenderer {
 
         // Prepare Y-sorted render list
         const renderList = [];
-        renderList.push({ y: mainPlayer.pixelY, entity: mainPlayer, type: 'player' });
 
+        // Main player
+        renderList.push({
+            type: 'player',
+            depth: getSortDepth(mainPlayer.pixelX, mainPlayer.pixelY, 0, viewMode),
+            entity: mainPlayer
+        });
+
+        // Nearby players
         if (nearbyPlayers) {
             nearbyPlayers.forEach(pState => {
                 const p = new MockPlayer(pState);
-                renderList.push({ y: p.pixelY, entity: p, type: 'player' });
+                renderList.push({
+                    type: 'player',
+                    depth: getSortDepth(p.pixelX, p.pixelY, 0, viewMode),
+                    entity: p
+                });
             });
         }
 
+        // Trees, logs, bushes as standing entities in 2.5D; only trees in 2D (matching main renderer)
         if (mapChunk) {
             for (let j = 0; j < mapChunk.grid.length; j++) {
                 for (let i = 0; i < mapChunk.grid[j].length; i++) {
-                    if (mapChunk.grid[j][i] === TILE_TYPE.TREE) {
+                    const tileType = mapChunk.grid[j][i];
+                    if (tileType === TILE_TYPE.TREE ||
+                        (viewMode === '2.5d' && (tileType === TILE_TYPE.LOGS || tileType === TILE_TYPE.BUSHES))) {
+                        const worldX = mapChunk.origin.x + i;
                         const worldY = mapChunk.origin.y + j;
-                        renderList.push({ y: worldY + 0.5, x: mapChunk.origin.x + i, yPos: worldY, type: 'tree' });
+
+                        let typeStr = 'tree';
+                        let img = this.assets.tree;
+                        if (tileType === TILE_TYPE.LOGS) { typeStr = 'logs'; img = this.assets.logs; }
+                        else if (tileType === TILE_TYPE.BUSHES) { typeStr = 'bushes'; img = this.assets.bushes; }
+
+                        const baseDepth = getSortDepth(worldX, worldY, 0, viewMode);
+                        let depthOffset = 0.5;
+                        if (typeStr === 'logs' || typeStr === 'bushes') depthOffset = -0.25;
+
+                        renderList.push({
+                            type: typeStr,
+                            depth: baseDepth + depthOffset,
+                            entity: { x: worldX, y: worldY, z: 0, image: img }
+                        });
                     }
                 }
             }
         }
 
-        renderList.sort((a, b) => a.y - b.y);
+        // Sort by depth
+        renderList.sort((a, b) => a.depth - b.depth);
 
-        // Render sorted list
-        renderList.forEach(item => {
+        // Render sorted entities
+        for (const item of renderList) {
             if (item.type === 'player') {
-                item.entity.render(ctx, this.tileSize, cameraX, cameraY);
-            } else if (item.type === 'tree') {
-                const screenX = Math.round(item.x * this.tileSize - cameraX);
-                const screenY = Math.round(item.yPos * this.tileSize - cameraY);
-                // Offset tree upward by half a tile so trunk is halfway up the grid cell
-                const drawY = screenY - this.tileSize / 2;
-                ctx.drawImage(this.assets.tree, screenX, drawY, this.tileSize, this.tileSize);
+                item.entity.render(ctx, ts, cameraX, cameraY, viewMode);
+            } else {
+                const { x, y, z, image } = item.entity;
+                if (!image || !image.complete) continue;
+
+                const pos = project(x, y, z, viewMode, ts);
+                const baseX = pos.x - cameraX;
+                const baseY = pos.y - cameraY;
+
+                if (viewMode === '2.5d') {
+                    if (item.type === 'logs' || item.type === 'bushes') {
+                        const spriteWidth = ts * 0.7;
+                        const spriteHeight = ts * 0.55;
+                        const drawX = Math.round(baseX - spriteWidth / 2);
+                        const drawY = Math.round(baseY - spriteHeight * 0.5);
+                        ctx.drawImage(image, drawX, drawY, spriteWidth, spriteHeight);
+                    } else {
+                        const spriteWidth = ts;
+                        const spriteHeight = ts;
+                        const drawX = Math.round(baseX - spriteWidth / 2);
+                        const drawY = Math.round(baseY - spriteHeight);
+                        ctx.drawImage(image, drawX, drawY, spriteWidth, spriteHeight);
+                    }
+                } else {
+                    // 2D top-down
+                    const screenX = Math.round(x * ts - cameraX);
+                    const screenY = Math.round(y * ts - cameraY);
+                    if (item.type === 'tree') {
+                        const drawY = screenY - ts / 2; // trunk halfway up the grid cell
+                        ctx.drawImage(image, screenX, drawY, ts, ts);
+                    } else {
+                        ctx.drawImage(image, screenX, screenY, ts, ts);
+                    }
+                }
             }
-        });
+        }
     }
 }
