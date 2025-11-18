@@ -211,10 +211,8 @@ function renderYSorted(ctx, players, map, drawStartX, drawEndX, drawStartY, draw
                     // Tile Center projected:
                     const centerPos = project(x + 0.5, y + 0.5, z, viewMode, tileSize);
                     const drawX = Math.round(centerPos.x - camera.x - tileSize/2); // Center image horizontally
-                    const drawY = Math.round(centerPos.y - camera.y - tileSize + (tileSize * 0.25)); // Align bottom?
-                    
-                    // For standing items, we usually draw them somewhat vertically offset.
-                    // Let's anchor bottom of sprite to middle of tile height.
+                    // Shift sprite so its bottom sits at the center of the diamond
+                    const drawY = Math.round(centerPos.y - camera.y - tileSize);
                     
                     ctx.drawImage(image, drawX, drawY, tileSize, tileSize);
                 } else {
