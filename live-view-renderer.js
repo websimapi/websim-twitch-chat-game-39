@@ -37,6 +37,12 @@ export class LiveViewRenderer {
         this.state = null;
         this.animationFrameId = null;
         this.viewMode = '2d'; // '2d' or '2.5d'
+
+        // Zoom controls (similar to host camera)
+        this.baseTileSize = 32;
+        this.zoom = 1;
+        this.minZoom = 0.5;
+        this.maxZoom = 2;
     }
 
     async loadAssets() {
@@ -64,12 +70,28 @@ export class LiveViewRenderer {
         }
     }
 
+    // New: handle zoom via mouse wheel
+    handleWheel(deltaY) {
+        const zoomStep = 0.1;
+        const factor = deltaY < 0 ? (1 + zoomStep) : (1 - zoomStep);
+        const newZoom = Math.min(this.maxZoom, Math.max(this.minZoom, this.zoom * factor));
+        if (newZoom === this.zoom) return;
+        this.zoom = newZoom;
+        console.log(`Live View zoom set to: ${this.zoom.toFixed(2)}`);
+    }
+
     updateState(newState) {
         this.state = newState;
     }
 
     start() {
         this.loadAssets().then(() => {
+            // Attach wheel zoom handler once assets are ready
+            this.canvas.addEventListener('wheel', (e) => {
+                e.preventDefault();
+                this.handleWheel(e.deltaY);
+            }, { passive: false });
+
             this.renderLoop();
         });
     }
@@ -98,7 +120,9 @@ export class LiveViewRenderer {
         const { playerState, mapChunk, nearbyPlayers } = this.state;
         const mainPlayer = new MockPlayer(playerState);
 
-        const ts = this.tileSize;
+        // Use zoomed tile size similar to host camera
+        const ts = this.baseTileSize * this.zoom;
+        this.tileSize = ts;
         const viewMode = this.viewMode;
 
         // Compute camera based on view mode
