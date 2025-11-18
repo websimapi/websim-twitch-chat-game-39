@@ -80,7 +80,7 @@ function renderUI(state, data = {}) {
                 </button>
                 <div class="live-view-inventory-panel inventory-display">
                     <div class="inventory-item">
-                        <span class="label">${data.username}'s Inventory</span>
+                        <span class="label" id="inventory-owner-label">${data.username || 'Your'}'s Inventory</span>
                         <span class="value"></span>
                     </div>
                     <div class="inventory-item">
@@ -177,6 +177,7 @@ function updateInventoryDisplay(payload) {
         flowersEl.textContent = totalFlowers.toLocaleString();
     }
 
+    // Update XP and inventory owner label based on the Twitch player's state
     if (playerState && playerState.skills) {
         const woodcuttingXpEl = document.getElementById('woodcutting-xp');
         const gatheringXpEl = document.getElementById('gathering-xp');
@@ -189,6 +190,11 @@ function updateInventoryDisplay(payload) {
         if (gatheringXpEl) {
             const totalGathExp = Object.values(playerState.skills.gathering || {}).reduce((sum, amount) => sum + amount, 0);
             gatheringXpEl.textContent = totalGathExp.toLocaleString();
+        }
+
+        const ownerLabelEl = document.getElementById('inventory-owner-label');
+        if (ownerLabelEl && playerState.username) {
+            ownerLabelEl.textContent = `${playerState.username}'s Inventory`;
         }
     }
 }
