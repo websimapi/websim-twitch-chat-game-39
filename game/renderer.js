@@ -274,9 +274,17 @@ function renderHitboxes(ctx, players, map, camera, settings) {
             if (map.grid[j][i] !== TILE_TYPE.TREE) continue;
 
             const trunk = getTreeTrunkHitbox(i, j);
-            // Use the center of the trunk hitbox and draw a rounded (circular) outline
-            const centerX = trunk.x + trunk.width / 2;
-            const centerY = trunk.y + trunk.height / 2;
+
+            // In 2D, center the hitbox circle in the middle of the tile.
+            // In 2.5D, keep using the trunk center so it hugs the base of the tree.
+            let centerX, centerY;
+            if (viewMode === '2d') {
+                centerX = i + 0.5;
+                centerY = j + 0.5;
+            } else {
+                centerX = trunk.x + trunk.width / 2;
+                centerY = trunk.y + trunk.height / 2;
+            }
 
             const pos = project(centerX, centerY, 0, viewMode, tileSize);
             const screenX = pos.x - camera.x;
