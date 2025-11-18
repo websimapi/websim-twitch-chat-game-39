@@ -12,6 +12,9 @@ import { DEFAULT_GAME_SETTINGS } from './game-settings.js';
 import { setEnergyCooldown } from './twitch.js';
 import { renderGame } from './game/renderer.js';
 import { updateActiveChopping } from './game/chopping-manager.js';
+// New imports for refactored logic
+import { initRealtimeHost, sendLiveViewUpdate } from './game/realtime.js';
+import { handlePlayerCommand as handlePlayerCommandImpl } from './game/commands.js';
 
 export class Game {
     constructor(canvas, channel, worldName = 'default', hosts = [], settings = DEFAULT_GAME_SETTINGS) {
@@ -54,7 +57,9 @@ export class Game {
     }
 
     async init() {
-        await this.initRealtime();
+        // Refactored realtime initialization into game/realtime.js
+        await initRealtimeHost(this);
+
         await StorageManager.init(this.channel, this.worldName);
         const gameState = await StorageManager.loadGameState(this.channel, this.worldName);
 
@@ -89,177 +94,6 @@ export class Game {
         }, 5000); // Save every 5 seconds
     }
 
-    async initRealtime() {
-        if (this.room) return;
-        try {
-            const project = await window.websim.getCurrentProject();
-            const creator = await window.websim.getCreator();
-            const user = await window.websim.getCurrentUser();
-
-            // Only the project creator should act as the host
-            if (user.id !== creator.id) {
-                console.log("Not the project creator, real-time hosting disabled.");
-                return;
-            }
-
-            console.log("Project creator detected. Initializing real-time host...");
-            this.room = new WebsimSocket();
-            await this.room.initialize();
-            
-            // Announce that the host is online for anyone already connected
-            this.room.send({ type: 'host_online', hostId: this.room.clientId });
-
-            // Make onmessage async so we can load data if needed
-            this.room.onmessage = async (event) => {
-                const data = event.data;
-                const fromClientId = data.clientId;
-                
-                if (data.type === 'request_link') {
-                    this.handleLinkRequest(fromClientId);
-                } else if (data.type === 'request_host_info') {
-                    console.log(`Received host info request from ${fromClientId}. Responding.`);
-                    // A client just connected and is looking for the host.
-                    // Broadcast our presence again so they can see it.
-                    this.room.send({ type: 'host_online', hostId: this.room.clientId });
-                } else if (data.type === 'auth_with_token') {
-                    // Client is trying to authenticate with a previously issued token
-                    const token = data.token;
-                    if (!token) return;
-
-                    let payload = null;
-                    try {
-                        const decoded = atob(token);
-                        payload = JSON.parse(decoded);
-                    } catch (e) {
-                        console.warn("Failed to decode auth token:", e);
-                        return;
-                    }
-
-                    if (!payload || !payload.userId || !payload.exp) {
-                        console.warn("Invalid auth token payload.");
-                        return;
-                    }
-
-                    const now = Date.now();
-                    if (now > payload.exp) {
-                        console.log(`Auth token for user ${payload.userId} has expired.`);
-                        return;
-                    }
-
-                    // Ensure player exists in current game; if not, try to find in saved state
-                    let player = this.players.get(payload.userId);
-                    if (!player) {
-                        try {
-                            const gameState = await StorageManager.loadGameState(this.channel, this.worldName);
-                            const state = gameState.players && gameState.players[payload.userId];
-                            if (state && state.id && state.username) {
-                                player = new Player(state.id, state.username, state.color, this.settings);
-                                player.loadState(state);
-                                this.players.set(payload.userId, player);
-                                // Validate state against current map
-                                player.validateState(this.map, this);
-                                console.log(`Restored player ${player.username} from storage for token auth.`);
-                            } else {
-                                console.log(`No stored player data found for userId ${payload.userId}.`);
-                            }
-                        } catch (e) {
-                            console.error("Error restoring player from storage during token auth:", e);
-                        }
-                    }
-
-                    if (!player) {
-                        console.log(`Auth token references unknown playerId ${payload.userId}.`);
-                        return;
-                    }
-
-                    // Link this player to the client
-                    // Unlink any previous client linked to this player
-                    for (const [key, value] of this.linkedPlayers.entries()) {
-                        if (key === player.id || value === fromClientId) {
-                            this.linkedPlayers.delete(key);
-                        }
-                    }
-                    this.linkedPlayers.set(player.id, fromClientId);
-                    console.log(`Player ${player.username} authenticated via saved token for client ${fromClientId}.`);
-
-                    // Let the client know the link is active (no new token needed)
-                    this.room.send({
-                        type: 'link_success',
-                        forClientId: fromClientId,
-                        username: player.username
-                    });
-
-                    // Send an immediate live view update
-                    this.sendLiveViewUpdate(player);
-                }
-            };
-        } catch (error) {
-            console.error("Failed to initialize real-time features:", error);
-        }
-    }
-
-    handleLinkRequest(clientId) {
-        if (!this.room) return;
-        
-        const code = Math.random().toString(36).substring(2, 8).toUpperCase();
-        this.pendingLinks.set(code, { clientId, expiry: Date.now() + 5 * 60 * 1000 }); // 5 min expiry
-        
-        // Broadcast the code, the specific client will pick it up
-        this.room.send({ 
-            type: 'pairing_code', 
-            forClientId: clientId, 
-            code: code 
-        });
-        
-        console.log(`Generated pairing code ${code} for client ${clientId}`);
-        
-        // Clean up expired codes
-        setTimeout(() => {
-            if (this.pendingLinks.has(code)) {
-                this.pendingLinks.delete(code);
-                console.log(`Pairing code ${code} expired.`);
-            }
-        }, 5 * 60 * 1000);
-    }
-
-    sendLiveViewUpdate(player) {
-        if (!this.room || !player || !this.linkedPlayers.has(player.id)) return;
-
-        const clientId = this.linkedPlayers.get(player.id);
-        const inventoryData = {
-            logs: player.inventory.getLogCount(),
-            leaves: player.inventory.getTotalLeaves(),
-            flowers: player.inventory.flowers,
-        };
-
-        // Gather surrounding map data
-        const VIEW_RADIUS = 16; // Increased radius so Live View shows a larger, more seamless region
-        const mapChunkData = this.map.getChunk(player.pixelX, player.pixelY, VIEW_RADIUS);
-
-        // Gather nearby players
-        const nearbyPlayers = [];
-        for (const otherPlayer of this.players.values()) {
-            if (otherPlayer.id !== player.id && otherPlayer.isPowered()) {
-                const dx = player.pixelX - otherPlayer.pixelX;
-                const dy = player.pixelY - otherPlayer.pixelY;
-                if (dx * dx + dy * dy < VIEW_RADIUS * VIEW_RADIUS) {
-                    nearbyPlayers.push(otherPlayer.getState());
-                }
-            }
-        }
-
-        this.room.send({
-            type: 'live_view_update',
-            forClientId: clientId,
-            payload: {
-                inventory: inventoryData,
-                playerState: player.getState(),
-                mapChunk: mapChunkData,
-                nearbyPlayers: nearbyPlayers,
-            }
-        });
-    }
-
     resize() {
         this.canvas.width = window.innerWidth;
         this.canvas.height = window.innerHeight;
@@ -281,159 +115,8 @@ export class Game {
     }
 
     handlePlayerCommand(userId, command, args) {
-        const player = this.players.get(userId);
-        if (!player) return;
-
-        if (command === 'me') {
-            if (this.settings.visuals.allow_me_command) {
-                this.camera.setFocus(player.id);
-                console.log(`[${player.username}] used !me command to focus camera.`);
-            }
-            return;
-        }
-
-        // --- Host Command Check ---
-        if (command === 'energy') {
-            if (!this.hosts.has(player.username.toLowerCase())) {
-                console.log(`[${player.username}] tried to use host command !energy but is not a host.`);
-                return;
-            }
-
-            const amount = args && !isNaN(args.amount) ? Math.max(1, Math.min(12, args.amount)) : 1;
-            let targetPlayer = player;
-
-            if (args && args.targetUsername) {
-                const targetUsernameLower = args.targetUsername.toLowerCase();
-                const foundTarget = Array.from(this.players.values()).find(p => p.username.toLowerCase() === targetUsernameLower);
-                if (foundTarget) {
-                    targetPlayer = foundTarget;
-                } else {
-                    console.log(`[${player.username}] tried to give energy to non-existent player "${args.targetUsername}".`);
-                    return; // Target not found
-                }
-            }
-            
-            targetPlayer.addEnergy(amount);
-            console.log(`[Host] ${player.username} gave ${amount} energy to ${targetPlayer.username}.`);
-            return;
-        }
-
-        if (command === 'link') {
-            const code = args.code ? args.code.toUpperCase() : null;
-            if (this.room && code && this.pendingLinks.has(code)) {
-                const linkData = this.pendingLinks.get(code);
-
-                if (Date.now() > linkData.expiry) {
-                    console.log(`[${player.username}] tried to use expired code ${code}.`);
-                    this.pendingLinks.delete(code);
-                    return;
-                }
-                
-                // Unlink any old client associated with this twitch user
-                for (const [key, value] of this.linkedPlayers.entries()) {
-                    if (value === linkData.clientId) {
-                        this.linkedPlayers.delete(key);
-                    }
-                }
-
-                this.linkedPlayers.set(player.id, linkData.clientId);
-                this.pendingLinks.delete(code);
-
-                console.log(`[${player.username}] successfully linked their account with client ${linkData.clientId}.`);
-
-                this.room.send({
-                    type: 'link_success',
-                    forClientId: linkData.clientId,
-                    username: player.username
-                });
-
-                // Generate a simple JWT-like token (base64-encoded JSON) valid for 7 days
-                const tokenPayload = {
-                    userId: player.id,
-                    username: player.username,
-                    exp: Date.now() + 7 * 24 * 60 * 60 * 1000 // 7 days
-                };
-                try {
-                    const token = btoa(JSON.stringify(tokenPayload));
-                    this.room.send({
-                        type: 'jwt_token',
-                        forClientId: linkData.clientId,
-                        token
-                    });
-                    console.log(`Issued JWT token for ${player.username} valid until ${new Date(tokenPayload.exp).toISOString()}`);
-                } catch (e) {
-                    console.error("Failed to generate JWT token:", e);
-                }
-                
-                this.sendLiveViewUpdate(player);
-            } else {
-                console.log(`[${player.username}] tried to use invalid or non-existent code "${code}".`);
-            }
-            return;
-        }
-
-        if (!player.isPowered()) {
-             console.log(`Player ${player.username} issued command "${command}" but has no energy.`);
-             // Allow setting the command even without energy, it will start when they get some.
-        }
-
-        if (command === 'chop') {
-            player.activeCommand = 'chop';
-            player.followTargetId = null;
-            if (player.isPowered()) {
-                startChoppingCycle(player, this.map);
-                console.log(`Player ${player.username} initiated !chop command.`);
-            } else {
-                 console.log(`Player ${player.username} set !chop command. It will start when they have energy.`);
-            }
-        } else if (command === 'gather') {
-            player.activeCommand = 'gather';
-            player.followTargetId = null;
-            if (player.isPowered()) {
-                startGatheringCycle(player, this.map);
-                console.log(`Player ${player.username} initiated !gather command.`);
-            } else {
-                console.log(`Player ${player.username} set !gather command. It will start when it has energy.`);
-            }
-        } else if (command === 'follow') {
-            let targetPlayer = null;
-            if (args && args.targetUsername) {
-                const targetUsernameLower = args.targetUsername.toLowerCase();
-                // Find any player, even offline, to store their ID. The follow logic will handle if they are powered or not.
-                targetPlayer = Array.from(this.players.values()).find(p => p.username.toLowerCase() === targetUsernameLower);
-                 if (!targetPlayer) {
-                    console.log(`[${player.username}] Could not find any player (online or off) named "${args.targetUsername}".`);
-                    return;
-                }
-            } else {
-                // Find nearest powered player
-                let minDistance = Infinity;
-                for (const otherPlayer of this.players.values()) {
-                    if (otherPlayer.id === player.id || !otherPlayer.isPowered()) continue;
-                    const dx = otherPlayer.pixelX - player.pixelX;
-                    const dy = otherPlayer.pixelY - player.pixelY;
-                    const distance = dx * dx + dy * dy;
-                    if (distance < minDistance) {
-                        minDistance = distance;
-                        targetPlayer = otherPlayer;
-                    }
-                }
-            }
-
-            if (targetPlayer) {
-                player.activeCommand = 'follow';
-                player.followTargetId = targetPlayer.id;
-                if (player.isPowered()) {
-                    player.state = PLAYER_STATE.FOLLOWING;
-                }
-                console.log(`[${player.username}] will now follow ${targetPlayer.username}.`);
-            } else {
-                console.log(`[${player.username}] Could not find anyone nearby to follow.`);
-                if (player.isPowered()) {
-                    player.state = PLAYER_STATE.IDLE;
-                }
-            }
-        }
+        // Delegated to game/commands.js for maintainability
+        handlePlayerCommandImpl(this, userId, command, args);
     }
 
     addOrUpdatePlayer(chatter) {
@@ -504,7 +187,8 @@ export class Game {
         for (const player of this.players.values()) {
             player.update(deltaTime, this.map, this.players, this);
             if (this.linkedPlayers.has(player.id) && shouldSendUpdate) {
-                this.sendLiveViewUpdate(player);
+                // Use refactored helper in game/realtime.js
+                sendLiveViewUpdate(this, player);
             }
         }
 
