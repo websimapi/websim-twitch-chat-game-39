@@ -85,26 +85,40 @@ function renderTargetHighlights(ctx, players, camera, tileSize, settings) {
             const targetX = player.actionTarget.x;
             const targetY = player.actionTarget.y;
 
-            const pos = project(targetX, targetY, 0, viewMode, tileSize);
-            const screenX = pos.x - camera.x;
-            const screenY = pos.y - camera.y;
+            if (viewMode === '2.5d') {
+                // Use the isometric center of the tile for correct 2.5D alignment
+                const centerPos = project(targetX + 0.5, targetY + 0.5, 0, viewMode, tileSize);
+                const screenCX = centerPos.x - camera.x;
+                const screenCY = centerPos.y - camera.y;
 
-            // Check visible? Simplified check
-            if (screenX > -tileSize * 2 && screenX < ctx.canvas.width + tileSize * 2 &&
-                screenY > -tileSize * 2 && screenY < ctx.canvas.height + tileSize * 2) {
+                // Diamond sized to the isometric tile footprint
+                const halfWidth = tileSize * 0.5;   // horizontal extent
+                const halfHeight = tileSize * 0.25; // vertical extent (matches projection ratios)
 
-                ctx.strokeStyle = indicatorColor;
-                
-                if (viewMode === '2.5d') {
-                    // Draw a diamond shape for 2.5D
+                // Visibility check with a small margin
+                if (
+                    screenCX > -halfWidth * 2 && screenCX < ctx.canvas.width + halfWidth * 2 &&
+                    screenCY > -halfHeight * 2 && screenCY < ctx.canvas.height + halfHeight * 2
+                ) {
+                    ctx.strokeStyle = indicatorColor;
                     ctx.beginPath();
-                    ctx.moveTo(screenX + tileSize, screenY + tileSize/2); // Right
-                    ctx.lineTo(screenX + tileSize/2, screenY + tileSize); // Bottom
-                    ctx.lineTo(screenX, screenY + tileSize/2); // Left
-                    ctx.lineTo(screenX + tileSize/2, screenY); // Top
+                    ctx.moveTo(screenCX + halfWidth, screenCY);          // Right
+                    ctx.lineTo(screenCX,            screenCY + halfHeight); // Bottom
+                    ctx.lineTo(screenCX - halfWidth, screenCY);          // Left
+                    ctx.lineTo(screenCX,            screenCY - halfHeight); // Top
                     ctx.closePath();
                     ctx.stroke();
-                } else {
+                }
+            } else {
+                // 2D top-down: use tile's top-left corner
+                const pos = project(targetX, targetY, 0, viewMode, tileSize);
+                const screenX = pos.x - camera.x;
+                const screenY = pos.y - camera.y;
+
+                if (screenX > -tileSize * 2 && screenX < ctx.canvas.width + tileSize * 2 &&
+                    screenY > -tileSize * 2 && screenY < ctx.canvas.height + tileSize * 2) {
+
+                    ctx.strokeStyle = indicatorColor;
                     ctx.strokeRect(screenX + 1, screenY + 1, tileSize - 2, tileSize - 2);
                 }
             }
