@@ -277,7 +277,8 @@ function renderHitboxes(ctx, players, map, camera, settings) {
             const screenY = pos.y - camera.y;
 
             // Radius based on trunk size in tile units, scaled to pixels
-            const radius = (Math.max(trunk.width, trunk.height) * tileSize) / 2;
+            // Halved to make the tree hitbox circle 1/2 the previous size
+            const radius = (Math.max(trunk.width, trunk.height) * tileSize) / 4;
 
             ctx.beginPath();
             ctx.arc(screenX, screenY, radius, 0, Math.PI * 2);
