@@ -189,32 +189,26 @@ function renderYSorted(ctx, players, map, drawStartX, drawEndX, drawStartY, draw
                 const screenY = Math.round(pos.y - camera.y);
                 
                 if (viewMode === '2.5d') {
-                    // Draw standing up. Anchor at bottom center of tile?
-                    // Project gives top-left corner of tile in 2D, or left corner in 2.5D?
-                    // Our project() returns:
-                    // 2.5D: x=Top point of diamond (min Y?), y=Left point?
-                    // Wait, (x-y)*0.5*ts. (0,0) -> 0,0. (1,0) -> 0.5, 0.25.
-                    // Let's visualize:
-                    // (0,0) is top corner of grid.
-                    // The image should be drawn such that its bottom aligns with the tile center?
-                    // Usually sprites are anchored bottom-center.
-                    
-                    // The projected point (x, y) for integer coordinates corresponds to the "top-left" corner in grid space,
-                    // which maps to the LEFT vertex of the diamond?
-                    // Let's re-verify projection: x=0,y=0 -> 0,0. x=1,y=0 -> 0.5w, 0.25h.
-                    // Midpoint of tile (0.5, 0.5) -> (0, 0.25h + 0.25h)?? No.
-                    // x=0.5, y=0.5 -> (0, 0.5 * 0.5ts) -> No.
-                    // x=0.5, y=0.5 -> isoX = 0, isoY = 1.0 * 0.25ts = 0.25ts.
-                    // So center of tile is (0, 0.25ts) relative to tile origin (0,0).
-                    
-                    // We want the sprite bottom center to be at tile center.
-                    // Tile Center projected:
+                    // Draw standing up. Anchor at bottom center of tile.
                     const centerPos = project(x + 0.5, y + 0.5, z, viewMode, tileSize);
-                    const drawX = Math.round(centerPos.x - camera.x - tileSize/2); // Center image horizontally
-                    // Shift sprite so its bottom sits at the center of the diamond
-                    const drawY = Math.round(centerPos.y - camera.y - tileSize);
-                    
-                    ctx.drawImage(image, drawX, drawY, tileSize, tileSize);
+                    const baseX = centerPos.x - camera.x;
+                    const baseY = centerPos.y - camera.y;
+
+                    if (item.type === 'logs' || item.type === 'bushes') {
+                        // Smaller footprint so they fit inside the isometric diamond
+                        const spriteWidth = tileSize * 0.7;
+                        const spriteHeight = tileSize * 0.55;
+                        const drawX = Math.round(baseX - spriteWidth / 2);
+                        const drawY = Math.round(baseY - spriteHeight);
+                        ctx.drawImage(image, drawX, drawY, spriteWidth, spriteHeight);
+                    } else {
+                        // Trees: full height but still anchored to tile center
+                        const spriteWidth = tileSize;
+                        const spriteHeight = tileSize;
+                        const drawX = Math.round(baseX - spriteWidth / 2);
+                        const drawY = Math.round(baseY - spriteHeight);
+                        ctx.drawImage(image, drawX, drawY, spriteWidth, spriteHeight);
+                    }
                 } else {
                     // 2D
                     ctx.drawImage(image, screenX, screenY, tileSize, tileSize);
