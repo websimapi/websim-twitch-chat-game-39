@@ -230,6 +230,7 @@ function renderHitboxes(ctx, players, map, camera, settings) {
 
     const tileSize = map.tileSize;
 
+    // --- Player hitboxes ---
     for (const player of players.values()) {
         if (!player.isPowered()) continue;
         const hitbox = getPlayerHitbox(player); // x, y are center
@@ -250,6 +251,38 @@ function renderHitboxes(ctx, players, map, camera, settings) {
         ctx.beginPath();
         ctx.arc(screenX, screenY, hitbox.radius * tileSize, 0, Math.PI * 2);
         ctx.stroke();
+    }
+
+    // --- Tree hitboxes (rounded) ---
+    // Compute visible tile range so we only iterate trees that can be on screen
+    const { drawStartX, drawEndX, drawStartY, drawEndY } = getVisibleTileRange(
+        camera,
+        ctx.canvas,
+        map,
+        viewMode
+    );
+
+    for (let j = drawStartY; j < drawEndY; j++) {
+        for (let i = drawStartX; i < drawEndX; i++) {
+            if (j < 0 || j >= map.height || i < 0 || i >= map.width) continue;
+            if (map.grid[j][i] !== TILE_TYPE.TREE) continue;
+
+            const trunk = getTreeTrunkHitbox(i, j);
+            // Use the center of the trunk hitbox and draw a rounded (circular) outline
+            const centerX = trunk.x + trunk.width / 2;
+            const centerY = trunk.y + trunk.height / 2;
+
+            const pos = project(centerX, centerY, 0, viewMode, tileSize);
+            const screenX = pos.x - camera.x;
+            const screenY = pos.y - camera.y;
+
+            // Radius based on trunk size in tile units, scaled to pixels
+            const radius = (Math.max(trunk.width, trunk.height) * tileSize) / 2;
+
+            ctx.beginPath();
+            ctx.arc(screenX, screenY, radius, 0, Math.PI * 2);
+            ctx.stroke();
+        }
     }
 
     // Tree hitboxes
