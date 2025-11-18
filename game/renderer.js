@@ -1,0 +1,307 @@
+import { PLAYER_STATE } from '../player-state.js';
+import { AudioManager } from '../audio-manager.js';
+import { getPlayerHitbox, getTreeTrunkHitbox } from '../game/physics.js';
+import { TILE_TYPE } from '../map-tile-types.js';
+import { project, getSortDepth } from '../game/projection.js';
+
+function getVisibleTileRange(camera, canvas, map, viewMode) {
+    const ts = map.tileSize;
+    
+    if (viewMode === '2.5d') {
+        // Simple heuristic: Expand range significantly to cover rotation/skew
+        // Center tile
+        const centerX = (camera.x + canvas.width/2); // Screen coord relative to world 0,0? No camera.x IS the offset.
+        // Inverse projection is complex. Let's just return a large box around the approximate center.
+        // Since camera.x/y are somewhat arbitrary in 2.5D mode without the center offset logic being perfectly strictly defined 
+        // (we defined camera as top-left of viewport for 2d), we need to be careful.
+        
+        // Approximation:
+        // Get rough center in world units
+        const centerX_Screen = camera.x + canvas.width / 2;
+        const centerY_Screen = camera.y + canvas.height / 2;
+        
+        // Map to Grid:
+        // x_scr = (x-y)*0.5*ts => x-y = x_scr / (0.5*ts)
+        // y_scr = (x+y)*0.25*ts => x+y = y_scr / (0.25*ts)
+        // 2x = (x_scr/0.5ts) + (y_scr/0.25ts)
+        const factorX = centerX_Screen / (0.5 * ts);
+        const factorY = centerY_Screen / (0.25 * ts);
+        const gridCenterX = (factorX + factorY) / 2;
+        const gridCenterY = (factorY - factorX) / 2; // Approx
+        
+        const radius = Math.ceil(canvas.width / ts) + 5; // Generous radius
+        
+        return {
+            drawStartX: Math.max(0, Math.floor(gridCenterX - radius)),
+            drawEndX: Math.min(map.width, Math.ceil(gridCenterX + radius)),
+            drawStartY: Math.max(0, Math.floor(gridCenterY - radius)),
+            drawEndY: Math.min(map.height, Math.ceil(gridCenterY + radius))
+        };
+    }
+
+    const startTileX = Math.floor(camera.x / ts);
+    const endTileX = Math.ceil((camera.x + canvas.width) / ts);
+    const startTileY = Math.floor(camera.y / ts);
+    const endTileY = Math.ceil((camera.y + canvas.height) / ts);
+
+    const drawStartX = Math.max(0, startTileX);
+    const drawEndX = Math.min(map.width, endTileX);
+    const drawStartY = Math.max(0, startTileY);
+    const drawEndY = Math.min(map.height, endTileY);
+
+    return { drawStartX, drawEndX, drawStartY, drawEndY };
+}
+
+function renderTargetHighlights(ctx, players, camera, tileSize, settings) {
+    if (!(settings.visuals && settings.visuals.show_target_indicator)) return;
+    const viewMode = settings.visuals.view_mode || '2d';
+
+    ctx.save();
+    ctx.lineWidth = 2;
+    ctx.shadowBlur = 8;
+    
+    const alpha = (Math.sin(performance.now() / 250) + 1) / 2 * 0.6 + 0.4; 
+    
+    const woodcuttingStates = [PLAYER_STATE.MOVING_TO_TREE, PLAYER_STATE.CHOPPING];
+    const gatheringStates = [
+        PLAYER_STATE.MOVING_TO_LOGS,
+        PLAYER_STATE.HARVESTING_LOGS,
+        PLAYER_STATE.MOVING_TO_BUSHES,
+        PLAYER_STATE.HARVESTING_BUSHES
+    ];
+
+    for (const player of players.values()) {
+        let indicatorColor = null;
+
+        if (woodcuttingStates.includes(player.state)) {
+            ctx.shadowColor = 'rgba(255, 255, 100, 0.8)';
+            indicatorColor = `rgba(255, 255, 100, ${alpha})`;
+        } else if (gatheringStates.includes(player.state)) {
+            ctx.shadowColor = 'rgba(100, 220, 255, 0.8)';
+            indicatorColor = `rgba(100, 220, 255, ${alpha})`;
+        }
+        
+        if (indicatorColor && player.actionTarget) {
+            const targetX = player.actionTarget.x;
+            const targetY = player.actionTarget.y;
+
+            const pos = project(targetX, targetY, 0, viewMode, tileSize);
+            const screenX = pos.x - camera.x;
+            const screenY = pos.y - camera.y;
+
+            // Check visible? Simplified check
+            if (screenX > -tileSize * 2 && screenX < ctx.canvas.width + tileSize * 2 &&
+                screenY > -tileSize * 2 && screenY < ctx.canvas.height + tileSize * 2) {
+
+                ctx.strokeStyle = indicatorColor;
+                
+                if (viewMode === '2.5d') {
+                    // Draw a diamond shape for 2.5D
+                    ctx.beginPath();
+                    ctx.moveTo(screenX + tileSize, screenY + tileSize/2); // Right
+                    ctx.lineTo(screenX + tileSize/2, screenY + tileSize); // Bottom
+                    ctx.lineTo(screenX, screenY + tileSize/2); // Left
+                    ctx.lineTo(screenX + tileSize/2, screenY); // Top
+                    ctx.closePath();
+                    ctx.stroke();
+                } else {
+                    ctx.strokeRect(screenX + 1, screenY + 1, tileSize - 2, tileSize - 2);
+                }
+            }
+        }
+    }
+    ctx.restore();
+}
+
+function renderYSorted(ctx, players, map, drawStartX, drawEndX, drawStartY, drawEndY, tileSize, camera, settings) {
+    const renderList = [];
+    const viewMode = settings.visuals.view_mode || '2d';
+
+    // 1. Add players to render list
+    for (const player of players.values()) {
+        if (player.isPowered()) {
+            renderList.push({
+                type: 'player',
+                // In 2.5D, Z-sort is based on diagonal depth (x+y).
+                // project() doesn't return depth, so we calculate sort key manually.
+                depth: getSortDepth(player.pixelX, player.pixelY, 0, viewMode),
+                entity: player,
+            });
+        }
+    }
+    
+    // 2. Add tall map objects (trees) and objects that should "stand up" in 2.5D (logs, bushes)
+    // In 2D mode, logs/bushes are drawn in renderBase (flat). In 2.5D, we draw them here (standing).
+    
+    const shouldStandUp = (tileType) => {
+        if (viewMode === '2.5d') {
+            return tileType === TILE_TYPE.TREE || tileType === TILE_TYPE.LOGS || tileType === TILE_TYPE.BUSHES;
+        }
+        return tileType === TILE_TYPE.TREE;
+    };
+
+    for (let j = drawStartY; j < drawEndY; j++) {
+        for (let i = drawStartX; i < drawEndX; i++) {
+            if (j < 0 || j >= map.height || i < 0 || i >= map.width) continue;
+            const tileType = map.grid[j] ? map.grid[j][i] : TILE_TYPE.GRASS;
+            
+            if (shouldStandUp(tileType)) {
+                let typeStr = 'tree';
+                let img = map.treeTile;
+                if (tileType === TILE_TYPE.LOGS) { typeStr = 'logs'; img = map.logsTile; }
+                else if (tileType === TILE_TYPE.BUSHES) { typeStr = 'bushes'; img = map.bushesTile; }
+
+                renderList.push({
+                    type: typeStr,
+                    depth: getSortDepth(i, j, 0, viewMode) + 0.5, // Add small offset to put tile objects behind players on same tile? Or centered.
+                    entity: { x: i, y: j, z: 0, image: img }
+                });
+            }
+        }
+    }
+    
+    // 3. Sort the list by depth
+    renderList.sort((a, b) => a.depth - b.depth);
+
+    // 4. Render from the sorted list
+    for (const item of renderList) {
+        if (item.type === 'player') {
+            item.entity.render(ctx, tileSize, camera.x, camera.y, viewMode);
+        } else {
+            const { x, y, z, image } = item.entity;
+             if (image && image.complete) {
+                const pos = project(x, y, z, viewMode, tileSize);
+                const screenX = Math.round(pos.x - camera.x);
+                const screenY = Math.round(pos.y - camera.y);
+                
+                if (viewMode === '2.5d') {
+                    // Draw standing up. Anchor at bottom center of tile?
+                    // Project gives top-left corner of tile in 2D, or left corner in 2.5D?
+                    // Our project() returns:
+                    // 2.5D: x=Top point of diamond (min Y?), y=Left point?
+                    // Wait, (x-y)*0.5*ts. (0,0) -> 0,0. (1,0) -> 0.5, 0.25.
+                    // Let's visualize:
+                    // (0,0) is top corner of grid.
+                    // The image should be drawn such that its bottom aligns with the tile center?
+                    // Usually sprites are anchored bottom-center.
+                    
+                    // The projected point (x, y) for integer coordinates corresponds to the "top-left" corner in grid space,
+                    // which maps to the LEFT vertex of the diamond?
+                    // Let's re-verify projection: x=0,y=0 -> 0,0. x=1,y=0 -> 0.5w, 0.25h.
+                    // Midpoint of tile (0.5, 0.5) -> (0, 0.25h + 0.25h)?? No.
+                    // x=0.5, y=0.5 -> (0, 0.5 * 0.5ts) -> No.
+                    // x=0.5, y=0.5 -> isoX = 0, isoY = 1.0 * 0.25ts = 0.25ts.
+                    // So center of tile is (0, 0.25ts) relative to tile origin (0,0).
+                    
+                    // We want the sprite bottom center to be at tile center.
+                    // Tile Center projected:
+                    const centerPos = project(x + 0.5, y + 0.5, z, viewMode, tileSize);
+                    const drawX = Math.round(centerPos.x - camera.x - tileSize/2); // Center image horizontally
+                    const drawY = Math.round(centerPos.y - camera.y - tileSize + (tileSize * 0.25)); // Align bottom?
+                    
+                    // For standing items, we usually draw them somewhat vertically offset.
+                    // Let's anchor bottom of sprite to middle of tile height.
+                    
+                    ctx.drawImage(image, drawX, drawY, tileSize, tileSize);
+                } else {
+                    // 2D
+                    ctx.drawImage(image, screenX, screenY, tileSize, tileSize);
+                }
+            }
+        }
+    }
+}
+
+// Hitboxes and path lines follow similar projection logic updates
+function renderHitboxes(ctx, players, map, camera, settings) {
+    if (!settings.visuals || !settings.visuals.show_hitboxes) return;
+    const viewMode = settings.visuals.view_mode || '2d';
+
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255, 0, 0, 0.8)';
+    ctx.lineWidth = 1;
+
+    const tileSize = map.tileSize;
+
+    for (const player of players.values()) {
+        if (!player.isPowered()) continue;
+        const hitbox = getPlayerHitbox(player); // x, y are center
+        const pos = project(hitbox.x, hitbox.y, 0, viewMode, tileSize);
+        
+        const screenX = pos.x - camera.x;
+        const screenY = pos.y - camera.y;
+        // Hitbox is a circle in 2D. In 2.5D it should technically be an ellipse on the ground.
+        // For debug visuals, a circle at projected point is fine.
+        
+        ctx.beginPath();
+        ctx.arc(screenX, screenY, hitbox.radius * tileSize, 0, Math.PI * 2);
+        ctx.stroke();
+    }
+
+    // Tree hitboxes
+    // ... (Simplified for brevity: only drawing if 2D or basic rect for 2.5D debug)
+    ctx.restore();
+}
+
+function renderPathingLines(ctx, players, camera, map, settings) {
+    if (!settings.visuals || !settings.visuals.show_pathing_lines) return;
+    const viewMode = settings.visuals.view_mode || '2d';
+
+    ctx.save();
+    ctx.lineWidth = 2;
+    ctx.setLineDash([5, 5]);
+
+    const tileSize = map.tileSize;
+    
+    const isMovingState = (state) => {
+        return state.startsWith('moving_to') || state === PLAYER_STATE.FOLLOWING;
+    };
+
+    for (const player of players.values()) {
+        if (!player.isPowered() || !player.path || player.path.length === 0 || !isMovingState(player.state)) continue;
+
+        const pathColor = player.color || '#FFFFFF';
+        ctx.strokeStyle = pathColor;
+        ctx.globalAlpha = 0.8;
+
+        ctx.beginPath();
+
+        // Player center
+        const pPos = project(player.pixelX + player.offsetX, player.pixelY + player.offsetY, 0, viewMode, tileSize);
+        ctx.moveTo(pPos.x - camera.x, pPos.y - camera.y);
+
+        for (const waypoint of player.path) {
+            const wPos = project(waypoint.x + 0.5, waypoint.y + 0.5, 0, viewMode, tileSize);
+            ctx.lineTo(wPos.x - camera.x, wPos.y - camera.y);
+        }
+
+        ctx.stroke();
+    }
+
+    ctx.restore();
+}
+
+export function renderGame(game) {
+    const { ctx, canvas, camera, map, players, settings } = game;
+
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const tileSize = map.tileSize;
+    const viewMode = settings.visuals.view_mode || '2d';
+    
+    const listenerX = camera.x + canvas.width / 2;
+    const listenerY = camera.y + canvas.height / 2;
+    AudioManager.setListenerPosition(listenerX, listenerY, tileSize);
+    
+    const { drawStartX, drawEndX, drawStartY, drawEndY } = getVisibleTileRange(camera, canvas, map, viewMode);
+    
+    map.renderBase(ctx, camera.x, camera.y, drawStartX, drawEndX, drawStartY, drawEndY, viewMode);
+
+    renderTargetHighlights(ctx, players, camera, tileSize, settings);
+
+    renderYSorted(ctx, players, map, drawStartX, drawEndX, drawStartY, drawEndY, tileSize, camera, settings);
+
+    renderHitboxes(ctx, players, map, camera, settings);
+    renderPathingLines(ctx, players, camera, map, settings);
+}
