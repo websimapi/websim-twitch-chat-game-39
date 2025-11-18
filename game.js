@@ -109,7 +109,8 @@ export class Game {
             // Announce that the host is online for anyone already connected
             this.room.send({ type: 'host_online', hostId: this.room.clientId });
 
-            this.room.onmessage = (event) => {
+            // Make onmessage async so we can load data if needed
+            this.room.onmessage = async (event) => {
                 const data = event.data;
                 const fromClientId = data.clientId;
                 
@@ -120,6 +121,76 @@ export class Game {
                     // A client just connected and is looking for the host.
                     // Broadcast our presence again so they can see it.
                     this.room.send({ type: 'host_online', hostId: this.room.clientId });
+                } else if (data.type === 'auth_with_token') {
+                    // Client is trying to authenticate with a previously issued token
+                    const token = data.token;
+                    if (!token) return;
+
+                    let payload = null;
+                    try {
+                        const decoded = atob(token);
+                        payload = JSON.parse(decoded);
+                    } catch (e) {
+                        console.warn("Failed to decode auth token:", e);
+                        return;
+                    }
+
+                    if (!payload || !payload.userId || !payload.exp) {
+                        console.warn("Invalid auth token payload.");
+                        return;
+                    }
+
+                    const now = Date.now();
+                    if (now > payload.exp) {
+                        console.log(`Auth token for user ${payload.userId} has expired.`);
+                        return;
+                    }
+
+                    // Ensure player exists in current game; if not, try to find in saved state
+                    let player = this.players.get(payload.userId);
+                    if (!player) {
+                        try {
+                            const gameState = await StorageManager.loadGameState(this.channel, this.worldName);
+                            const state = gameState.players && gameState.players[payload.userId];
+                            if (state && state.id && state.username) {
+                                player = new Player(state.id, state.username, state.color, this.settings);
+                                player.loadState(state);
+                                this.players.set(payload.userId, player);
+                                // Validate state against current map
+                                player.validateState(this.map, this);
+                                console.log(`Restored player ${player.username} from storage for token auth.`);
+                            } else {
+                                console.log(`No stored player data found for userId ${payload.userId}.`);
+                            }
+                        } catch (e) {
+                            console.error("Error restoring player from storage during token auth:", e);
+                        }
+                    }
+
+                    if (!player) {
+                        console.log(`Auth token references unknown playerId ${payload.userId}.`);
+                        return;
+                    }
+
+                    // Link this player to the client
+                    // Unlink any previous client linked to this player
+                    for (const [key, value] of this.linkedPlayers.entries()) {
+                        if (key === player.id || value === fromClientId) {
+                            this.linkedPlayers.delete(key);
+                        }
+                    }
+                    this.linkedPlayers.set(player.id, fromClientId);
+                    console.log(`Player ${player.username} authenticated via saved token for client ${fromClientId}.`);
+
+                    // Let the client know the link is active (no new token needed)
+                    this.room.send({
+                        type: 'link_success',
+                        forClientId: fromClientId,
+                        username: player.username
+                    });
+
+                    // Send an immediate live view update
+                    this.sendLiveViewUpdate(player);
                 }
             };
         } catch (error) {
@@ -275,6 +346,24 @@ export class Game {
                     forClientId: linkData.clientId,
                     username: player.username
                 });
+
+                // Generate a simple JWT-like token (base64-encoded JSON) valid for 7 days
+                const tokenPayload = {
+                    userId: player.id,
+                    username: player.username,
+                    exp: Date.now() + 7 * 24 * 60 * 60 * 1000 // 7 days
+                };
+                try {
+                    const token = btoa(JSON.stringify(tokenPayload));
+                    this.room.send({
+                        type: 'jwt_token',
+                        forClientId: linkData.clientId,
+                        token
+                    });
+                    console.log(`Issued JWT token for ${player.username} valid until ${new Date(tokenPayload.exp).toISOString()}`);
+                } catch (e) {
+                    console.error("Failed to generate JWT token:", e);
+                }
                 
                 this.sendLiveViewUpdate(player);
             } else {

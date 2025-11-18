@@ -8,6 +8,9 @@ let isLinked = false;
 let liveViewRenderer = null;
 let liveViewMode = '2d'; // '2d' or '2.5d'
 
+// New: local storage key for JWT-style token
+const LOCAL_STORAGE_TOKEN_KEY = 'twitch_live_view_jwt';
+
 const STATUS = {
     INITIAL: 'initial',
     REQUESTING: 'requesting',
@@ -136,6 +139,26 @@ function renderUI(state, data = {}) {
     }
 }
 
+// Helper: read a stored token and check expiry
+function getStoredToken() {
+    const raw = localStorage.getItem(LOCAL_STORAGE_TOKEN_KEY);
+    if (!raw) return null;
+    try {
+        const decoded = atob(raw);
+        const payload = JSON.parse(decoded);
+        if (!payload.exp || Date.now() > payload.exp) {
+            console.log("Stored live view token has expired, clearing.");
+            localStorage.removeItem(LOCAL_STORAGE_TOKEN_KEY);
+            return null;
+        }
+        return raw;
+    } catch (e) {
+        console.warn("Failed to parse stored live view token, clearing.", e);
+        localStorage.removeItem(LOCAL_STORAGE_TOKEN_KEY);
+        return null;
+    }
+}
+
 function updateInventoryDisplay(payload) {
     const { inventory, playerState } = payload;
     const logsEl = document.getElementById('logs-count');
@@ -195,6 +218,12 @@ export async function initRemoteInventory() {
         }
     });
 
+    // Check for existing token immediately
+    const existingToken = getStoredToken();
+    if (existingToken) {
+        console.log("Found stored live view token, will attempt automatic authentication.");
+    }
+
     try {
         room = new WebsimSocket();
         await room.initialize();
@@ -219,7 +248,18 @@ export async function initRemoteInventory() {
                 clearTimeout(hostCheckTimeout);
                 hostClientId = data.hostId;
                 console.log(`Host found with clientId: ${hostClientId}`);
-                if (!isLinked) { // Don't change UI if already linked
+
+                // If we have a stored token, try automatic authentication
+                const token = getStoredToken();
+                if (token && !isLinked) {
+                    console.log("Attempting automatic live view authentication with stored token.");
+                    room.send({
+                        type: 'auth_with_token',
+                        token
+                    });
+                    // While we wait, keep UI simple; host will respond with link_success/live_view_update
+                } else if (!isLinked) {
+                    // No token, show host-found state so user can request link
                     renderUI(STATUS.HOST_FOUND);
                 }
                 return; // Stop processing this event.
@@ -239,6 +279,20 @@ export async function initRemoteInventory() {
                         liveViewRenderer = new LiveViewRenderer(canvas);
                         liveViewRenderer.setViewMode(liveViewMode);
                         liveViewRenderer.start();
+                    }
+                }
+            } else if (data.type === 'jwt_token') {
+                // Store the token for future automatic authentication
+                if (data.token) {
+                    try {
+                        const decoded = atob(data.token);
+                        const payload = JSON.parse(decoded);
+                        if (payload && payload.exp) {
+                            localStorage.setItem(LOCAL_STORAGE_TOKEN_KEY, data.token);
+                            console.log(`Stored live view token valid until ${new Date(payload.exp).toISOString()}`);
+                        }
+                    } catch (e) {
+                        console.error("Failed to store JWT token:", e);
                     }
                 }
             } else if (data.type === 'live_view_update') {
