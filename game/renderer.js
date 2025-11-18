@@ -247,9 +247,9 @@ function renderHitboxes(ctx, players, map, camera, settings) {
 
         // In 2.5D, the rendered player circle is slightly lifted; adjust the hitbox upward
         // by 1/4 of its height (i.e., half the radius) to better wrap the player sprite.
-        // if (viewMode === '2.5d') {
-        //     screenY -= hitbox.radius * tileSize * 0.5;
-        // }
+        if (viewMode === '2.5d') {
+            screenY -= hitbox.radius * tileSize * 0.5;
+        }
 
         // Hitbox is a circle in 2D. In 2.5D it should technically be an ellipse on the ground.
         // For debug visuals, a circle at projected point is fine.
@@ -275,16 +275,9 @@ function renderHitboxes(ctx, players, map, camera, settings) {
 
             const trunk = getTreeTrunkHitbox(i, j);
 
-            // In 2D, center the hitbox circle in the middle of the tile.
-            // In 2.5D, keep using the trunk center so it hugs the base of the tree.
-            let centerX, centerY;
-            if (viewMode === '2d') {
-                centerX = i + 0.5;
-                centerY = j + 0.5;
-            } else {
-                centerX = trunk.x + trunk.width / 2;
-                centerY = trunk.y + trunk.height / 2;
-            }
+            // Center the hitbox circle in the middle of the tile for both 2D and 2.5D
+            const centerX = i + 0.5;
+            const centerY = j + 0.5;
 
             const pos = project(centerX, centerY, 0, viewMode, tileSize);
             const screenX = pos.x - camera.x;
