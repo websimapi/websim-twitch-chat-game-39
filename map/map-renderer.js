@@ -50,13 +50,10 @@ export class MapRenderer {
             // x' = ax + cy + e
             // y' = bx + dy + f
             
-            ctx.translate(-cameraX, -cameraY);
-            
-            // The projection logic expects input in Grid Coordinates. 
-            // But drawImage uses Pixel Coordinates (Grid * TileSize).
-            // So we need to adjust the matrix so that input pixels map correctly.
-            // Input X (1 pixel) represents 1/ts Grid Units.
-            // So T(1, 0) pixels = T(1/ts, 0) grid -> (0.5, 0.25) pixels output
+            // Snap camera translation to whole pixels to reduce subpixel shimmering
+            const snappedCameraX = Math.round(cameraX);
+            const snappedCameraY = Math.round(cameraY);
+            ctx.translate(-snappedCameraX, -snappedCameraY);
             
             ctx.transform(0.5, 0.25, -0.5, 0.25, 0, 0);
             
