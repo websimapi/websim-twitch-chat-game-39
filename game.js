@@ -26,7 +26,7 @@ export class Game {
 
         this.players = new Map();
         this.map = new GameMap(32); // TileSize is 32
-        this.camera = new Camera(this.canvas, this.map, this.players);
+        this.camera = new Camera(this.canvas, this.map, this.players, this.settings);
         this.activeChoppingTargets = new Map();
 
         // Realtime communication for remote inventory

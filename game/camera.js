@@ -33,7 +33,7 @@ export class Camera {
 
         const focusedPlayer = this.focusedPlayerId ? this.players.get(this.focusedPlayerId) : null;
         const tileSize = this.map.tileSize;
-        const viewMode = this.settings.visuals?.view_mode || '2d';
+        const viewMode = this.settings?.visuals?.view_mode || '2d';
 
         if (focusedPlayer) {
             // Calculate projected center of player
