@@ -46,9 +46,6 @@ export class Game {
         this.canvas.addEventListener('wheel', (e) => {
             e.preventDefault();
             this.camera.handleWheel(e.deltaY);
-            // Update map tile size based on new zoom
-            const zoomedTileSize = this.baseTileSize * this.camera.zoom;
-            this.map.setTileSize(zoomedTileSize);
         }, { passive: false });
         
         this.saveInterval = setInterval(async () => {

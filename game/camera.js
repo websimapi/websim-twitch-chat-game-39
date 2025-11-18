@@ -18,6 +18,9 @@ export class Camera {
         this.zoom = 1;
         this.minZoom = 0.5;
         this.maxZoom = 2;
+
+        // Remember the base (unzoomed) tile size so we can derive zoomed size
+        this.baseTileSize = this.map.tileSize;
     }
 
     setFocus(playerId) {
@@ -35,10 +38,46 @@ export class Camera {
         const zoomStep = 0.1;
         const factor = deltaY < 0 ? (1 + zoomStep) : (1 - zoomStep);
         const newZoom = Math.min(this.maxZoom, Math.max(this.minZoom, this.zoom * factor));
-        if (newZoom !== this.zoom) {
-            this.zoom = newZoom;
-            console.log(`Camera zoom set to: ${this.zoom.toFixed(2)}`);
+        if (newZoom === this.zoom) {
+            return;
         }
+
+        const viewMode = this.settings?.visuals?.view_mode || '2d';
+        const oldTileSize = this.map.tileSize;
+
+        // Compute current world-space point at the center of the screen
+        const centerScreenX = this.x + this.canvas.width / 2;
+        const centerScreenY = this.y + this.canvas.height / 2;
+
+        let worldCenterX, worldCenterY;
+
+        if (viewMode === '2.5d') {
+            // Invert isometric projection used in project()
+            // x_scr = (x - y) * 0.5 * ts
+            // y_scr = (x + y) * 0.25 * ts
+            const factorX = centerScreenX / (0.5 * oldTileSize);
+            const factorY = centerScreenY / (0.25 * oldTileSize);
+            worldCenterX = (factorX + factorY) / 2;
+            worldCenterY = (factorY - factorX) / 2;
+        } else {
+            // 2D top-down inverse
+            worldCenterX = centerScreenX / oldTileSize;
+            worldCenterY = centerScreenY / oldTileSize;
+        }
+
+        // Apply new zoom and update tile size
+        this.zoom = newZoom;
+        const newTileSize = this.baseTileSize * this.zoom;
+        this.map.setTileSize(newTileSize);
+
+        // Re-project the same world center with the new zoom
+        const projectedCenter = project(worldCenterX, worldCenterY, 0, viewMode, newTileSize);
+
+        // Adjust camera so that the worldCenter stays under the screen center
+        this.x = projectedCenter.x - this.canvas.width / 2;
+        this.y = projectedCenter.y - this.canvas.height / 2;
+
+        console.log(`Camera zoom set to: ${this.zoom.toFixed(2)}`);
     }
 
     update(deltaTime) {
