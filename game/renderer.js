@@ -235,8 +235,15 @@ function renderHitboxes(ctx, players, map, camera, settings) {
         const hitbox = getPlayerHitbox(player); // x, y are center
         const pos = project(hitbox.x, hitbox.y, 0, viewMode, tileSize);
         
-        const screenX = pos.x - camera.x;
-        const screenY = pos.y - camera.y;
+        let screenX = pos.x - camera.x;
+        let screenY = pos.y - camera.y;
+
+        // In 2.5D, the rendered player circle is slightly lifted; adjust the hitbox upward
+        // by 1/4 of its height (i.e., half the radius) to better wrap the player sprite.
+        if (viewMode === '2.5d') {
+            screenY -= hitbox.radius * tileSize * 0.5;
+        }
+
         // Hitbox is a circle in 2D. In 2.5D it should technically be an ellipse on the ground.
         // For debug visuals, a circle at projected point is fine.
         
